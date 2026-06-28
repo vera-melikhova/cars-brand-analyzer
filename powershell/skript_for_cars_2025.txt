@@ -1,0 +1,705 @@
+# =========================================================
+# ПОДКЛЮЧЕНИЕ К EXCEL
+# =========================================================
+
+$Excel = [Runtime.InteropServices.Marshal]::GetActiveObject('Excel.Application')
+$Workbook = $Excel.Workbooks.Item("cars - 2025.xlsx")
+$Sheet = $Workbook.ActiveSheet
+
+Write-Host "Подключено к: $($Workbook.Name)" -ForegroundColor Green
+
+$Range = $Sheet.Range("A2:A13873")
+$RawData = $Range.Value2
+
+Write-Host "Данные загружены: $($RawData.Count) строк" -ForegroundColor Yellow
+
+# =========================================================
+# ТРАНСЛИТЕРАЦИЯ (ТОЛЬКО кириллица → латиница, цифры и латиница не трогаем)
+# =========================================================
+
+$cyrToLat = @{
+    'А'='A';  'Б'='B';  'В'='V';  'Г'='G';  'Д'='D';  'Е'='E';  'Ё'='E'
+    'Ж'='ZH'; 'З'='Z';  'И'='I';  'Й'='Y';  'К'='K';  'Л'='L';  'М'='M'
+    'Н'='N';  'О'='O';  'П'='P';  'Р'='R';  'С'='S';  'Т'='T';  'У'='U'
+    'Ф'='F';  'Х'='KH'; 'Ц'='TS'; 'Ч'='CH'; 'Ш'='SH'; 'Щ'='SHCH'
+    'Ъ'='';   'Ы'='Y';  'Ь'='';   'Э'='E';  'Ю'='YU'; 'Я'='YA'
+}
+
+function Convert-CyrToLat {
+    param([string]$text)
+    $sb = [System.Text.StringBuilder]::new()
+    foreach ($char in $text.ToCharArray()) {
+        $c = $char.ToString()
+        if ($cyrToLat.ContainsKey($c)) {
+            [void]$sb.Append($cyrToLat[$c])
+        } else {
+            [void]$sb.Append($c)
+        }
+    }
+    return $sb.ToString()
+}
+
+# =========================================================
+# ПРАВИЛА БРЕНДОВ
+# Порядок важен — более специфичные правила идут выше
+# =========================================================
+
+$brandRules = [ordered]@{
+
+    "MERCEDES-BENZ" = @(
+        "MERCEDES", "MERSEDES", "MERSEDESBENTS", "ERCEDES", "^MB$", "AMG", "MAYBACH",
+        "AKLASSE", "GLKKLASSE", "GLEKLASSE", "GLSKLASSE", "VKLASSE", "GLCKLASSE",
+        "V KLASSE", "GLC KLASSE", "GLC-KLASSE", "GLK KLASSE", "A-KLASSE", "A KLASSE", "AKLASSE",
+        "C KLASSE", "C-KLASSE", "CKLASSE",
+        "SPRINTER", "GKLASSE", "GCLASS", "EKLASSE", "SKLASSE", "CLEKLASSE",
+        "VITO", "EQE", "GLC250", "^GLE$", "^GLS$", "^GLC$", "^GLK$", "ML",
+        "^V$", "^C$", "^IB$"
+    )
+
+    "BMW" = @(
+        "^BMW$", "^BMV$", "ALPINA", "M340I", "^M3$", "^M5$", "^M8$", "^M$",
+        "^X1$", "^X2$", "^X3$", "^X4$", "^X5$", "^X6$", "^X7$", "^X$",
+        "^730LD$", "^740$", "^740LD$", "^850I$", "^523$", "^520$",
+        "^530$", "^630$", "^630D$", "^320$", "^320D$", "^330$",
+        "^3$", "^5$", "3 SERIES", "5 SERIES", "^3SERIES$", "^5SERIES$",
+        "BMWX", "^G01F$"
+    )
+
+    "AUDI" = @(
+        "^AUDI$", "^A4$", "^A6$", "^A7$", "^A8$", "^Q3$", "^Q5$",
+        "^Q6$", "^Q7$", "^Q8$", "^RS$", "^RS4$", "^RS5$", "^RS6$",
+        "RS AVANT", "^ETRON$", "^SQ6$"
+    )
+
+    "TOYOTA" = @(
+        "TOYOTA", "TOYTA", "TOTSOTA",
+        "^CAMRY$", "^KAMRI$", "LANDCRUISER", "LAND CRUISER",
+        "^HIGHLANDER$", "^PRADO$", "^RAV4$", "^CHR$", "^URD2$", "^URD$", "URD-2"
+    )
+
+    "LEXUS" = @(
+        "LEXUS", "LEKSUS",
+        "^RX$", "^LX$", "^GX$", "^NX$", "^ES$", "^LS$", "^UX$",
+        "^GV80$", "^GV70$", "^GTS$"
+    )
+
+    "KIA" = @(
+        "^KIA$", "^KIAA$", "^KAIA$", "^KIYA$",
+        "^SPORTAGE$", "^MOHAVE$", "^SORENTO$", "^CARNIVAL$",
+        "^K5$", "^RIO$", "^IX35$"
+    )
+
+    "HYUNDAI" = @(
+        "HYUNDAI", "KHENDAI", "KHENDAY", "KHENDE",
+        "^SOLARIS$", "^SOLYARIS$", "^PALISADE$", "SOLLERS", "SORRELS",
+        "^TUCSON$", "^SONATA$", "^EQUUS$", "^AVANTE$", "^SANTA$",
+        "KHENDE PALISADE", "HENDE"
+    )
+
+    "LIXIANG" = @(
+        "LIXIANG", "LISYANG", "^LI$", "^L7$", "^L9$"
+    )
+
+    "PORSCHE" = @(
+        "PORSCHE", "PORSH", "PORSHE", "PRORSH",
+        "^CAYENNE$", "^MACAN$", "^PANAMERA$", "^911$"
+    )
+
+    "VOLKSWAGEN" = @(
+        "VOLKSWAGEN", "LKSWAGEN", "^VW$",
+        "^TERAMONT$", "^JETTA$", "^TRANSPORTER$", "^CARAVELLE$",
+        "^TIGUAN$", "^POLO$", "^TOUAREG$"
+    )
+
+    "LAND ROVER" = @(
+        "LAND ROVER", "LANDROVER", "RANGE ROVER", "RANGEROVER",
+        "FREELANDER", "^DISCOVERY$", "^DEFENDER$", "^EVOQUE$",
+        "^VELAR$", "^EPACE$", "^LEND$", "LEND ROVER"
+    )
+
+    "GEELY" = @(
+        "GEELY", "DZHILI",
+        "^ATLAS$", "^COOLRAY$", "^MONJARO$", "^TUGELLA$",
+        "^OKAVANGO$", "^PREFACE$", "^BINYUE$"
+    )
+
+    "HAVAL" = @(
+        "HAVAL", "KHAVAL", "KHAVVAL",
+        "^JOLION$", "^F7$", "^DARGO$"
+    )
+
+    "LADA" = @(
+        "^LADA$", "^VAZ$", "^LARGUS$", "^XCROSS$",
+        "^VESTA$", "^GRANTA$", "NIVA", "^XRAY$", "^VIS$", "VIS 1806",
+        "^ROX$", "ROX 01", "ROX POLESTONES"
+    )
+
+    "SKODA" = @(
+        "SKODA", "SHKODA", "SHKOAD",
+        "^RAPID$", "^OCTAVIA$", "^SUPERB$"
+    )
+
+    "EXEED" = @(
+        "EXEED", "IKSID", "EKSID", "CHERYEXEED",
+        "^TXL$"
+    )
+
+    "VOLVO" = @(
+        "VOLVO", "VOLVAO",
+        "^XC90$", "^XC60$", "^XC70$", "^V90$", "^V60$", "^S90$"
+    )
+
+    "NISSAN" = @(
+        "NISSAN",
+        "^QASHQAI$", "XTRAIL", "X TRAIL", "^ALMERA$",
+        "^PATROL$", "^TERRANO$"
+    )
+
+    "CHANGAN" = @(
+        "CHANGAN", "^CS35PLUS$", "^CS75PLUS$", "^UNIS$", "^UNI$"
+    )
+
+    "CHERY" = @(
+        "^CHERY$", "^CHERI$", "^CHERRI$",
+        "^OMODA$", "TIGGO", "^ARRIZO$", "^3500000$"
+    )
+
+    "ZEEKR" = @(
+        "ZEEKR", "^ZIKR$", "^ZIKER$"
+    )
+
+    "GENESIS" = @(
+        "GENESIS", "DZHENESIS", "DZHENENIS", "DZHENEZIS", "DZHENE"
+    )
+
+    "MITSUBISHI" = @(
+        "MITSUBISHI", "MITSUBISI",
+        "^PAJERO$", "^ECLIPSE$", "^OUTLANDER$", "^ASX$", "FUSO"
+    )
+
+    "MAZDA" = @(
+        "MAZDA", "^CX5$", "^CX9$", "^MAZDA3$", "^MAZDA6$"
+    )
+
+    "FORD" = @(
+        "^FORD$", "^F150$", "F-150", "F 150", "^FOCUS$", "^MONDEO$",
+        "^EXPLORER$", "^KUGA$", "^RANGER$", "RAPTOR"
+    )
+
+    "RENAULT" = @(
+        "RENAULT", "^RENO$",
+        "^DUSTER$", "^KAPTUR$", "^LOGAN$", "^SANDERO$",
+        "^DOKKER$", "^ARKANA$"
+    )
+
+    "VOYAH" = @(
+        "VOYAH", "^VOYAN$", "^VOYAKH$", "FREE EVR", "^FREE$"
+    )
+
+    "TANK" = @(
+        "^TANK$"
+    )
+
+    "KAMAZ" = @(
+        "KAMAZ"
+    )
+
+    "CADILLAC" = @(
+        "CADILLAC", "KADILAK", "^ESCALADE$"
+    )
+
+    "FAW" = @(
+        "^FAW$", "^JH6$", "BESTUNE", "^T5G$", "FHTRUCK"
+    )
+
+    "GAC" = @(
+        "^GAC$", "^GAK$", "^GS8$", "TRUMPCHI",
+        "^GS3$", "^URV$"
+    )
+
+    "LYNK & CO" = @(
+        "LYNK"
+    )
+
+    "HONDA" = @(
+        "HONDA", "KHONDA",
+        "^CRV$", "^CIVIC$", "^STEPWGN$"
+    )
+
+    "ACURA" = @(
+        "ACURA"
+    )
+
+    "INFINITI" = @(
+        "INFINITI"
+    )
+
+    "MOSKVICH" = @(
+        "MOSKVICH"
+    )
+
+    "BELGEE" = @(
+        "BELGEE"
+    )
+
+    "JAECOO" = @(
+        "JAECOO"
+    )
+
+    "JETOUR" = @(
+        "JETOUR", "^DARGO$"
+    )
+
+    "ROLLS-ROYCE" = @(
+        "ROLLSROYCE", "ROLLS ROYCE", "^ROYS$",
+        "^PHANTOM$", "^GHOST$", "^CULLINAN$", "ROYCE"
+    )
+
+    "JAC" = @(
+        "^JAC$", "^DZHAK$"
+    )
+
+    "DODGE" = @(
+        "DODGE", "DODZH",
+        "^CHALLENGER$", "^DURANGO$"
+    )
+
+    "RAM" = @(
+        "^RAM$"
+    )
+
+    "BENTLEY" = @(
+        "BENTLEY", "BENTLI", "^CONTINENTAL$"
+    )
+
+    "PEUGEOT" = @(
+        "PEUGEOT", "PEZHO",
+        "^PARTNER$", "^JUMPER$", "^SCUDO$"
+    )
+
+    "MINI COOPER" = @(
+        "^MINI$", "^COUNTRYMAN$", "^CLUBMAN$", "^JCW$"
+    )
+
+    "FOTON" = @(
+        "FOTON"
+    )
+
+    "AITO / SERES" = @(
+        "^AITO$", "^SERES$", "^FENGON$", "^DFSK$"
+    )
+
+    "LAMBORGHINI" = @(
+        "LAMBORGHINI"
+    )
+
+    "CHEVROLET" = @(
+        "CHEVROLET", "SHEVROLE",
+        "^TAHOE$", "^CAMARO$", "^LACETTI$", "^CRUZE$", "^AVEO$"
+    )
+
+    "HONGQI" = @(
+        "HONGQI", "NONGQI", "^ONGQI$"
+    )
+
+    "HONGYAN" = @(
+        "HONGYAN"
+    )
+
+    "HOWO" = @(
+        "HOWO"
+    )
+
+    "DAF" = @(
+        "^DAF$"
+    )
+
+    "SUBARU" = @(
+        "SUBARU",
+        "^FORESTER$", "^OUTBACK$", "^CROSSTREK$"
+    )
+
+    "CITROEN" = @(
+        "CITROEN", "SITROEN",
+        "^BERLINGO$", "^DAILY$", "SPACE TOURER", "SPACETOURER"
+    )
+
+    "JEEP" = @(
+        "^JEEP$", "^DZHIP$",
+        "^CHEROKEE$", "^WRANGLER$", "GRAND CHEROKEE", "GRANDCHEROKEE"
+    )
+
+    "DENZA" = @(
+        "DENZA"
+    )
+
+    "SUZUKI" = @(
+        "SUZUKI", "^JIMNY$", "^VITARA$"
+    )
+
+    "DONGFENG" = @(
+        "DONGFENG", "^JUNFENG$", "^DONG$"
+    )
+
+    "SANY" = @(
+        "SANY"
+    )
+
+    "UAZ" = @(
+        "^UAZ$", "^PATRIOT$", "^HUNTER$"
+    )
+
+    "KAIYI" = @(
+        "KAIYI"
+    )
+
+    "MAZ" = @(
+        "^MAZ$", "MAZ6430"
+    )
+
+    "XIAOMI" = @(
+        "XIAOMI", "^SU7$"
+    )
+
+    "ISUZU" = @(
+        "ISUZU", "IZUSU", "^ELF$", "^DMAX$"
+    )
+
+    "OPEL" = @(
+        "OPEL", "^ASTRA$", "^MOKKA$"
+    )
+
+    "GREAT WALL" = @(
+        "GREAT WALL", "GREATWALL", "^GWM$",
+        "^POER$", "^WEY$", "^ORA$", "^WINGLE$", "^TUGELLA$"
+    )
+
+    "JAGUAR" = @(
+        "JAGUAR", "YAGUAR", "^FTYPE$", "^LEVANTE$"
+    )
+
+    "SSANGYONG" = @(
+        "SSANGYONG", "^SSANG$", "^KGM$",
+        "^REXTON$", "^ACTYON$"
+    )
+
+    "AVATR" = @(
+        "AVATR"
+    )
+
+    "FIAT" = @(
+        "^FIAT$", "^DOBLO$", "^DUCATO$"
+    )
+
+    "FANGCHENGBAO" = @(
+        "FANGCHENGBAO"
+    )
+
+    "EVOLUTE" = @(
+        "EVOLUTE"
+    )
+
+    "KNEWSTAR" = @(
+        "KNEWSTAR"
+    )
+
+    "FERRARI" = @(
+        "FERRARI"
+    )
+
+    "TESLA" = @(
+        "TESLA", "^MODEL3$", "^MODELY$", "^MODELS$", "^MODELX$", "^CYBERTRUCK$"
+    )
+
+    "SWM" = @(
+        "^SWM$"
+    )
+
+    "LIVAN" = @(
+        "LIVAN"
+    )
+
+    "BYD" = @(
+        "^BYD$", "^HAN$", "^YUAN$", "^TANG$", "^SONG$", "^SEAL$"
+    )
+
+    "NIO" = @(
+        "^NIO$"
+    )
+
+    "LOTUS" = @(
+        "^LOTUS$"
+    )
+
+    "CHRYSLER" = @(
+        "CHRYSLER", "^PACIFICA$", "^300C$", "^CTS$"
+    )
+
+    "GMC" = @(
+        "^GMC$"
+    )
+
+    "FORTHING" = @(
+        "FORTHING"
+    )
+
+    "SKYWELL" = @(
+        "SKYWELL"
+    )
+
+    "LINCOLN" = @(
+        "LINCOLN", "^NAVIGATOR$", "^AVIATOR$"
+    )
+
+    "MHERO" = @(
+        "MHERO"
+    )
+
+    "CUPRA" = @(
+        "CUPRA"
+    )
+
+    "AURUS" = @(
+        "AURUS"
+    )
+
+    "LUXEED" = @(
+        "LUXEED"
+    )
+
+    "HIPHI" = @(
+        "HIPHI"
+    )
+
+    "DEEPAL" = @(
+        "DEEPAL"
+    )
+
+    "JIYUE" = @(
+        "JIYUE"
+    )
+
+    "ALFA ROMEO" = @(
+        "ALFA ROMEO", "ALFAROMEO", "^ALFA$", "^GIULIA$", "^STELVIO$"
+    )
+
+    "ASTON MARTIN" = @(
+        "ASTON MARTIN", "ASTON", "^DB11$", "^VANTAGE$"
+    )
+
+    "MASERATI" = @(
+        "MASERATI", "MAZERATI", "^LEVANTE$", "^GHIBLI$"
+    )
+
+    "SAMSUNG" = @(
+        "SAMSUNG"
+    )
+
+    "BAIC" = @(
+        "BAIC"
+    )
+
+    "RAVON" = @(
+        "RAVON"
+    )
+
+    "DAEWOO" = @(
+        "DAEWOO", "^MATIZ$", "^NEXIA$"
+    )
+
+    "JISHI" = @(
+        "JISHI"
+    )
+
+    "KSSBOHRER" = @(
+        "KSSBOHRER"
+    )
+
+    "МОТОЦИКЛЫ" = @(
+        "HARLEY", "DUCATI", "^KTM$", "KAWASAKI",
+        "YAMAHA", "TRIUMPH", "^BENDA$", "^VOGE$", "^KTM$"
+    )
+
+    # ГАЗ — грузовики и спецтехника на базе ГАЗ
+    "ГАЗ" = @(
+        "^GAZ$", "GAZEL", "GAZELLE", "^SOBOL$", "^GAZON$",
+        "^VALDAY$", "^VALDAI$", "^GAZELLEBUSINESS$",
+        "2818", "^2790A$", "NA BAZE GAZ", "BAZE GAZ"
+    )
+
+    # СПЕЦТЕХНИКА — всё что не легковые авто
+    "ПРИЦЕПЫ И СПЕЦТЕХНИКА" = @(
+        "SITRAK", "SHACMAN", "SHAKMAN",
+        "HOWO", "SCANIA", "MAN",
+        "FOTON", "FAW",
+        "KRONE", "KOGEL", "SCHMITZ", "CTTM", "NEFAZ",
+        "SESPEL", "BODEX", "WIELTON", "FLIEGL", "FLIGL",
+        "TONAR", "MZSA", "ORTHAUS", "KRAKER",
+        "KASSBOHRER", "KÄSSBOHRER", "KSSBOHRER",
+        "KUPAVA", "MEUSBURGER", "GRUNWALD", "YALCIN", "MARAL",
+        "ZOOMLION", "LONKING", "XCMG", "JCB", "SANY",
+        "IVANOVETS", "KLINTSY", "GALICHANIN", "TREKOL",
+        "PROMAVTO", "EVRAKOM", "GMZ", "BONUM", "EVM",
+        "VELTON", "TIGARBO", "MKDM", "ISTOK", "AVIOR",
+        "YUTONG", "HIGER", "ZHONGTONG", "PAZ", "IVECO", "IVEKO",
+        "URAL", "HINO", "FORLAND", "AUMAN", "CHENGLONG",
+        "KING LONG", "KINGLONG",
+        "TYAGACH", "TYAGACHSEDELNYY",
+        "AVTOBUS", "AVTOTSISTERNA", "AVTOKRAN", "AVTOVYSHKA",
+        "AVTOFURGON", "FURGON", "SAMOSVAL", "EKSKAVATOR",
+        "TRAKTOR", "TOPLIVOZAPRAVSHCHIK",
+        "GRUZOVOY", "GRUZOVOYBORTOVOY", "POLUPRITSEP",
+        "PRITSEP", "POLUPRITSEPFURGON", "SPECPRICEP",
+        "REFRIZHERATOR", "SPETS", "FOXTANK",
+        "LUIDOR", "BELAVA", "TENET", "OMEPS",
+        "TTM", "TTMTSENTR",
+        "ICE BEAR", "PONKING", "POLAR STONE",
+        "REGION", "LIDER", "DDZH",
+        "^KS$", "^KM$", "^AS$", "^AF$", "^PSS$",
+        "AF77", "AF47", "AF37", "AB73", "AF3",
+        "VFW3", "VFW4", "PSS13", "KS55", "AS6874",
+        "VIPO", "LVVDB", "BELARUS",
+        "3113RE", "2824NE", "2824PE",
+        "2824VK", "2824LN", "2824DH", "2824NJ", "57582A",
+        "57589A", "99422E", "82942K", "680248", "278858",
+        "278423", "278830", "27324G", "27115C", "47212A",
+        "47125C", "47254", "994273", "3720AA", "3009Z",
+        "3009TP", "3008BF", "5389P8", "2732FG", "2844SA",
+        "1804XN", "1992D2", "67912F", "3080D4", "J11116",
+        "9453", "28181", "32841", "56142",
+        "DRUGOE", "OTSUTSTVUET",
+        "OTING", "LEOPARD", "MAPLE", "^AB$"
+    )
+}
+
+# =========================================================
+# ОБРАБОТКА
+# =========================================================
+
+$stats        = @{}
+$emptyCount   = 0
+$unknownRows  = [System.Collections.Generic.List[string]]::new()
+$emptyRows    = [System.Collections.Generic.List[string]]::new()
+
+$totalRows = $RawData.GetLength(0)
+
+for ($i = 1; $i -le $totalRows; $i++) {
+
+    $item    = $RawData[$i, 1]
+    $rowNum  = $i + 1   # строка в Excel (данные начинаются с A2)
+
+    # Пустая ячейка
+    if (-not $item) {
+        $emptyCount++
+        $emptyRows.Add("Строка $rowNum")
+        continue
+    }
+
+    $raw = $item.ToString().Trim()
+
+    # Шаг 1 — убираем только спецсимволы кроме букв, цифр, пробелов
+    # Кириллицу НЕ трогаем — она нужна для транслитерации
+    $cleaned = $raw -replace '[^\p{L}0-9\s]', ' '
+
+    # Шаг 2 — приводим к верхнему регистру
+    $cleaned = $cleaned.ToUpper().Trim()
+
+    # Шаг 3 — транслитерация (теперь кириллица ещё есть)
+    $fullLine = Convert-CyrToLat $cleaned
+
+    # Шаг 4 — убираем лишние пробелы
+    $fullLine = ($fullLine -replace '\s+', ' ').Trim()
+
+    # Первое слово — резервный вариант
+    $word = $fullLine.Split(' ')[0]
+
+    # Поиск бренда
+    # Паттерны ^WORD$ — точное совпадение с первым словом ($word)
+    # Остальные паттерны — поиск в полной строке ($fullLine)
+    $foundBrand = $null
+    foreach ($brand in $brandRules.Keys) {
+        foreach ($pattern in $brandRules[$brand]) {
+            $matched = $false
+            if ($pattern -match '^\^[A-Z0-9]+\$$') {
+                $exactWord = $pattern.TrimStart('^').TrimEnd('$')
+                if ($word -eq $exactWord) { $matched = $true }
+            } else {
+                if ($fullLine -match $pattern) { $matched = $true }
+            }
+            if ($matched) { $foundBrand = $brand; break }
+        }
+        if ($foundBrand) { break }
+    }
+
+    # Не нашли — помечаем как неизвестное
+    if (-not $foundBrand) {
+        $foundBrand = "⚠ НЕИЗВЕСТНО: $word"
+        $unknownRows.Add("Строка $rowNum | $raw")
+    }
+
+    if ($stats.ContainsKey($foundBrand)) { $stats[$foundBrand]++ }
+    else { $stats[$foundBrand] = 1 }
+}
+
+# =========================================================
+# ВЫВОД — ОСНОВНОЙ ОТЧЁТ
+# =========================================================
+
+# =========================================================
+# ВЫВОД — В КОНСОЛЬ И В ФАЙЛ
+# =========================================================
+
+# Разделяем известные и неизвестные
+$knownStats   = @{}
+$unknownStats = @{}
+foreach ($key in $stats.Keys) {
+    if ($key -like "⚠*") { $unknownStats[$key] = $stats[$key] }
+    else { $knownStats[$key] = $stats[$key] }
+}
+
+$totalKnown   = ($knownStats.Values   | Measure-Object -Sum).Sum
+$totalUnknown = ($unknownStats.Values | Measure-Object -Sum).Sum
+$totalAll     = $totalKnown + $totalUnknown + $emptyCount
+
+# Формируем текст отчёта
+$lines = [System.Collections.Generic.List[string]]::new()
+$lines.Add("════════════════════════════════════════")
+$lines.Add("       ОТЧЁТ ПО МАРКАМ АВТО")
+$lines.Add("       $(Get-Date -Format 'dd.MM.yyyy HH:mm')")
+$lines.Add("════════════════════════════════════════")
+$lines.Add("")
+$lines.Add("=== НАЙДЕННЫЕ БРЕНДЫ ===")
+
+$knownStats.GetEnumerator() | Sort-Object Value -Descending | ForEach-Object {
+    $lines.Add("  $($_.Key): $($_.Value) шт.")
+}
+
+$lines.Add("")
+$lines.Add("=== НЕ РАСПОЗНАНО: $totalUnknown шт. ===")
+$unknownStats.GetEnumerator() | Sort-Object Value -Descending | ForEach-Object {
+    $lines.Add("  $($_.Key): $($_.Value)")
+}
+
+$lines.Add("")
+$lines.Add("=== СТРОКИ ТРЕБУЮЩИЕ ПРОВЕРКИ В EXCEL: $($unknownRows.Count) ===")
+$unknownRows | ForEach-Object { $lines.Add("  $_") }
+
+$lines.Add("")
+$lines.Add("=== ПУСТЫЕ ЯЧЕЙКИ: $emptyCount ===")
+$emptyRows | ForEach-Object { $lines.Add("  $_") }
+
+$lines.Add("")
+$lines.Add("════════════════ ИТОГО ════════════════")
+$lines.Add("  Распознано брендов:  $totalKnown шт.")
+$lines.Add("  Не распознано:       $totalUnknown шт.")
+$lines.Add("  Пустых ячеек:        $emptyCount шт.")
+$lines.Add("  ─────────────────────────────────────")
+$lines.Add("  ВСЕГО обработано:    $totalAll шт.")
+$lines.Add("  (в диапазоне A2:A13873 = 13872 строк)")
+$lines.Add("═══════════════════════════════════════")
+
+# Выводим в консоль
+$lines | ForEach-Object { Write-Host $_ }
+
+Write-Host ""
+Write-Host "═══════════════════════════════════════" -ForegroundColor Cyan
